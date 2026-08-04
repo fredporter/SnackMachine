@@ -23,6 +23,21 @@ uCore core owns:
 - health checks and lifecycle
 - baseline snack queue/status APIs
 
+## Product Model
+
+This model is practical with the current split and should be treated as a
+first-class contract:
+
+- `Snackbar` (uCore core): runtime API and queue/orchestration substrate.
+- `Popcorn Menu` (uCore core): lightweight launcher and status controls.
+- `SnackMachine` (extension): package manager and advanced snack tooling.
+- `SnackShack` (extension UX): snack store/catalog browser.
+- `Snack` (extension content unit): a small script or code action.
+- `Snackbox` (extension bundle unit): a collection of related snacks.
+
+Keep SnackShack as the store metaphor and avoid using it for runtime
+components.
+
 ## Quick Start
 
 ```bash
@@ -37,3 +52,4 @@ smx capabilities
 ## Contract
 
 See docs/INTEGRATION_CONTRACT.md for uCore integration details.
+See docs/SNACK_TAXONOMY.md for the canonical domain vocabulary.
