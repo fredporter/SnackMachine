@@ -4,8 +4,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+PYTHON_BIN="python3"
+if [[ -x "$HOME/Code/uCore/backend/.venv/bin/python" ]]; then
+  PYTHON_BIN="$HOME/Code/uCore/backend/.venv/bin/python"
+fi
+
 if [[ ! -d .venv ]]; then
-  python3 -m venv .venv
+  "$PYTHON_BIN" -m venv .venv
 fi
 
 source .venv/bin/activate
