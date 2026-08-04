@@ -12,12 +12,14 @@ install flows, and advanced snack operations.
 ## Scope
 
 This extension owns:
+
 - snack package discovery
 - package install/uninstall metadata
 - optional snack catalogs
 - extension capability handshake
 
 uCore core owns:
+
 - backend daemon
 - popcorn menu and launchers
 - health checks and lifecycle

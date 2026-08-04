@@ -5,9 +5,9 @@
 - `Snack`: small executable unit (script/code action).
 - `Snackbox`: grouped package of related Snacks.
 - `SnackShack`: catalog/store interface for browsing/installing Snackboxes and
-	Snacks.
+  Snacks.
 - `SnackMachine`: extension runtime that manages SnackShack, install state, and
-	extension capabilities.
+  extension capabilities.
 - `Snackbar`: uCore core daemon API/runtime (not the extension store).
 
 ## Extension Identity
@@ -20,6 +20,7 @@
 The extension must provide a capabilities payload that uCore can read.
 
 Required keys:
+
 - id
 - version
 - provides[]
@@ -36,21 +37,25 @@ Required keys:
 ## uCore Behavior
 
 When extension is unavailable:
+
 - uCore keeps popcorn menu and core snack workspace active.
 - Packaged snack actions are hidden or disabled.
 
 When extension is available:
+
 - uCore enables packaged snack install/uninstall actions.
 - uCore may expose extension routes/actions in Server/System surfaces.
 
 ## Ownership Boundary
 
 uCore core:
+
 - daemon lifecycle and health
 - popcorn menu and launchers
 - baseline snack queue/status routes
 
 SnackMachine extension:
+
 - SnackShack store/catalog
 - Snack and Snackbox metadata
 - package install/uninstall/update flow
