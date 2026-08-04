@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snackmachine-extension"
+version = "0.1.0"
+description = "SnackMachine extension for uCore packaged snacks"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "uDos Go" }]
+dependencies = []
+
+[project.scripts]
+smx = "snackmachine_ext.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["snackmachine_ext*"]
