@@ -74,13 +74,13 @@ def get_all_product_definitions() -> List[Dict[str, Any]]:
             "launch_command": ["python3", "-m", "ucode2.cli", "lift"],
         },
         {
-            "id": "udos-publishing",
-            "name": "Publishing Compiler",
+            "id": "ucore-publish",
+            "name": "uCore Publish",
             "category": "ecosystem",
             "icon": "publish",
-            "description": "Clean edition static compiler and WordPress publisher",
+            "description": "Clean edition static compiler and publication pipeline",
             "type": "repo",
-            "repo_path": CODE_ROOT / "udos-publishing",
+            "repo_path": CODE_ROOT / "uCore-Publish" if (CODE_ROOT / "uCore-Publish").exists() else CODE_ROOT / "udos-publishing",
         },
         {
             "id": "homenest",
