@@ -64,16 +64,6 @@ def get_all_product_definitions() -> List[Dict[str, Any]]:
             "launch_command": ["python3", "-m", "ucode_runtime"],
         },
         {
-            "id": "ucode2",
-            "name": "uCode 2 (Spatial)",
-            "category": "ecosystem",
-            "icon": "view_in_ar",
-            "description": "3D spatial scene interpreter & Minecraft voxel lifter",
-            "type": "repo",
-            "repo_path": CODE_ROOT / "uCode2",
-            "launch_command": ["python3", "-m", "ucode2.cli", "lift"],
-        },
-        {
             "id": "ucore-publish",
             "name": "uCore Publish",
             "category": "ecosystem",
