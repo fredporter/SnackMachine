@@ -82,13 +82,13 @@ def get_all_product_definitions() -> List[Dict[str, Any]]:
             "repo_path": CODE_ROOT / "HomeNook",
         },
         {
-            "id": "uvector",
-            "name": "uVector Studio",
+            "id": "ucode_plus",
+            "name": "uCode+ Studio",
             "category": "ecosystem",
             "icon": "draw",
-            "description": "Vector illustration & SVG optimization engine",
+            "description": "Spatial computing, vector illustration & image intelligence engine",
             "type": "repo",
-            "repo_path": CODE_ROOT / "uVector",
+            "repo_path": CODE_ROOT / "uCodePlus" if (CODE_ROOT / "uCodePlus").exists() else CODE_ROOT / "uVector",
         },
         {
             "id": "groovebox",

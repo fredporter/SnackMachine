@@ -73,3 +73,9 @@ smx capabilities
 ```
 
 and pass output to uCore extension registry integration.
+
+## Planned Apple Intelligence bridge
+
+The [bridge plan](APPLE_INTELLIGENCE_BRIDGE.md) describes the macOS Shortcuts
+pilot, capability ownership and uFlow receipt. The initial capability handshake
+above describes the currently available extension.
