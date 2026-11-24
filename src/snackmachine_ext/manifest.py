@@ -12,6 +12,7 @@ def capability_manifest() -> dict:
             "snacks.packages.install",
             "snacks.packages.uninstall",
             "snacks.packages.list",
+            "snacks.submit",
         ],
         "requires_ucore": ">=4.0.0",
         "status": "active",

@@ -23,7 +23,64 @@ log = logging.getLogger("snackmachine.activity_capture")
 VAULT_ROOT = Path.home() / "Vault"
 ACTIVITY_DIR = VAULT_ROOT / "Activity"
 EVENTS_FILE = ACTIVITY_DIR / "events.jsonl"
-DAILY_ACTIVITY_FILE = ACTIVITY_DIR / "Daily_Activity.md"
+# Text capture bounds (bridge: one small text payload per request)
+MAX_TEXT_BYTES = 10 * 1024  # 10 KiB bounded payload
+
+
+def _resolve_vault_path(destination: str, vault_root: Path) -> Path:
+    """Resolve and contain a user-supplied destination path within vault_root.
+
+    Rejects path traversal, absolute paths, and symlink directory escapes.
+    Returns the contained Path, or raises ValueError if containment fails.
+    """
+    if Path(destination).is_absolute():
+        raise ValueError("Absolute paths are not allowed; provide a relative destination within the Vault.")
+    candidate = (vault_root / destination).resolve()
+    vault_root_resolved = vault_root.resolve()
+    try:
+        candidate.relative_to(vault_root_resolved)
+    except ValueError:
+        raise ValueError("Destination escapes the approved Vault directory.")
+    parts = candidate.parts
+    current = vault_root_resolved
+    for part in parts[1:]:
+        current = current / part
+        if not current.exists():
+            break
+        if current.is_symlink():
+            try:
+                current.resolve().relative_to(vault_root_resolved)
+            except ValueError:
+                raise ValueError(
+                    f"Path component '{current}' is a symlink escaping the Vault."
+                )
+    return candidate
+
+
+def _generate_run_id(profile_id: str, request_id: str) -> str:
+    payload = json.dumps({"profile_id": profile_id, "request_id": request_id}, sort_keys=True)
+    return f"run-{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
+
+
+def _build_receipt(
+    run_id: str,
+    status: str,
+    file_path: Optional[str] = None,
+    error: Optional[str] = None,
+    request_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+) -> dict:
+    now_iso = datetime.now(UTC).isoformat()
+    return {
+        "run_id": run_id,
+        "status": status,
+        "file_path": file_path,
+        "error": error,
+        "request_id": request_id,
+        "profile_id": profile_id,
+        "completed_at": now_iso,
+    }
+
 
 
 def get_activity_dir() -> Path:
@@ -162,6 +219,7 @@ class ActivityCaptureEngine:
         self.events_file = self.activity_dir / "events.jsonl"
         self.markdown_file = self.activity_dir / "Daily_Activity.md"
         self.runner = runner or _default_jxa_runner
+        self._text_dedup: Dict[str, Any] = {}
 
     def _load_existing_ids(self) -> Set[str]:
         """Read all previously captured external_ids from events.jsonl."""
@@ -183,6 +241,81 @@ class ActivityCaptureEngine:
         if not script:
             return []
         return self.runner(script)
+
+    def capture_text(
+        self,
+        text: str,
+        profile_id: str,
+        request_id: str,
+        destination: str,
+    ) -> dict:
+        """Capture a bounded text payload into the profile-approved Vault.
+
+        Workflow:
+        1. Validate text size (max MAX_TEXT_BYTES).
+        2. Deduplicate by (profile_id, request_id): identical input returns existing run.
+        3. Resolve and contain destination within the Vault root (reject traversal/symlinks).
+        4. Write the text to a uniquely-named file.
+        5. Generate and return a receipt with run_id, status, and file_path.
+
+        Returns a receipt dict with keys: run_id, status, file_path, error, request_id, profile_id.
+        """
+        # 1. Validate text size
+        encoded = text.encode("utf-8")
+        if len(encoded) > MAX_TEXT_BYTES:
+            return {
+                "run_id": "",
+                "status": "error",
+                "error": f"Text exceeds maximum size of {MAX_TEXT_BYTES} bytes (got {len(encoded)}).",
+                "request_id": request_id,
+                "profile_id": profile_id,
+            }
+
+        # 2. Deduplicate by (profile_id, request_id)
+        dedup_key = f"{profile_id}:{request_id}"
+        if dedup_key in self._text_dedup:
+            return self._text_dedup[dedup_key]
+
+        # 3. Resolve and contain destination within Vault
+        try:
+            resolved_path = _resolve_vault_path(destination, self.vault_root)
+        except ValueError as exc:
+            return {
+                "run_id": "",
+                "status": "error",
+                "error": str(exc),
+                "request_id": request_id,
+                "profile_id": profile_id,
+            }
+
+        # 4. Generate run_id and write the file
+        run_id = _generate_run_id(profile_id, request_id)
+        self._text_dedup[dedup_key] = None  # mark in-progress
+
+        try:
+            resolved_path.parent.mkdir(parents=True, exist_ok=True)
+            resolved_path.write_text(text, encoding="utf-8")
+        except Exception as exc:
+            return {
+                "run_id": run_id,
+                "status": "error",
+                "error": f"Failed to write capture file: {exc}",
+                "request_id": request_id,
+                "profile_id": profile_id,
+            }
+
+        # 5. Build and return receipt
+        receipt = {
+            "run_id": run_id,
+            "status": "success",
+            "file_path": str(resolved_path),
+            "error": None,
+            "request_id": request_id,
+            "profile_id": profile_id,
+            "completed_at": datetime.now(UTC).isoformat(),
+        }
+        self._text_dedup[dedup_key] = receipt
+        return receipt
 
     def run_sync(self, sources: Optional[List[str]] = None) -> Dict[str, Any]:
         """Run idempotent capture across selected sources."""
