@@ -8,6 +8,7 @@ import sys
 
 from .activity_capture import ActivityCaptureEngine
 from .action_runner import default_runner, ActionRunner
+from .bridge_client import BridgeError, submit_capture
 from .launcher import discover_launchers
 from .manifest import capability_manifest
 
@@ -91,6 +92,12 @@ def main() -> None:
     p_text_capture.add_argument("--profile-grant", required=True, help="Profile grant identifier")
     p_text_capture.add_argument("--request-id", required=True, help="Unique client request ID")
 
+    p_submit = sub.add_parser("submit-capture", help="Submit a reviewed capture to uCore for a receipt")
+    p_submit.add_argument("--text", required=True, help="Bounded UTF-8 text")
+    p_submit.add_argument("--request-id", required=True, help="Unique client request ID")
+    p_submit.add_argument("--title", default="capture", help="Short title for the Vault note")
+    p_submit.add_argument("--base-url", default="http://127.0.0.1:8484", help="uCore base URL")
+
     sub.add_parser("actions", help="List available snack actions")
 
     args = parser.parse_args()
@@ -114,6 +121,19 @@ def main() -> None:
         )
         print(json.dumps(result, indent=2))
         raise SystemExit(0 if result.get("ok") else 1)
+    if args.command == "submit-capture":
+        try:
+            receipt = submit_capture(
+                args.text,
+                args.request_id,
+                title=args.title,
+                base_url=args.base_url,
+            )
+        except BridgeError as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
+            raise SystemExit(1)
+        print(json.dumps({"ok": True, **receipt}, indent=2))
+        raise SystemExit(0)
     if args.command == "actions":
         raise SystemExit(cmd_actions())
 
