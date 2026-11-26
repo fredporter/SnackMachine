@@ -13,7 +13,14 @@ def capability_manifest() -> dict:
             "snacks.packages.uninstall",
             "snacks.packages.list",
             "snacks.submit",
+            "snacks.bridge.apple_intelligence",
         ],
         "requires_ucore": ">=4.0.0",
         "status": "active",
+        "bridge": {
+            "available": True,
+            "version": "0.1.0",
+            "description": "macOS Shortcuts capture with Apple Intelligence optional transform,",
+            "requires_profile_grant": True,
+        },
     }

@@ -7,7 +7,7 @@ import platform
 import sys
 
 from .activity_capture import ActivityCaptureEngine
-from .action_runner import default_runner
+from .action_runner import default_runner, ActionRunner
 from .launcher import discover_launchers
 from .manifest import capability_manifest
 
@@ -18,7 +18,12 @@ def cmd_doctor() -> int:
         "platform": platform.platform(),
         "extension": "snackmachine-extension",
         "status": "ok",
+        "python_compatible": sys.version.startswith("3.12"),
     }
+    # Check bridge availability
+    from .manifest import capability_manifest
+    manifest = capability_manifest()
+    info["bridge"] = manifest.get("bridge", {})
     print(json.dumps(info, indent=2))
     return 0
 
@@ -34,6 +39,19 @@ def cmd_launchers(all_items: bool = False) -> int:
         "launchers": launchers,
         "count": len(launchers),
         "absent_hidden": not all_items,
+    }, indent=2))
+    return 0
+
+
+def cmd_bridge() -> int:
+    """Show bridge capability status."""
+    from .manifest import capability_manifest
+    manifest = capability_manifest()
+    bridge = manifest.get("bridge", {})
+    print(json.dumps({
+        "bridge_available": bridge.get("available", False),
+        "bridge_version": bridge.get("version"),
+        "requires_profile_grant": bridge.get("requires_profile_grant", False),
     }, indent=2))
     return 0
 
@@ -61,8 +79,17 @@ def main() -> None:
     p_launchers = sub.add_parser("launchers", help="List discovered product launchers (absent hidden)")
     p_launchers.add_argument("--all", action="store_true", help="Include absent products")
 
+    # Bridge command
+    sub.add_parser("bridge", help="Show Apple Intelligence bridge capability status")
+
     p_capture = sub.add_parser("capture", help="Perform bounded Apple activity capture")
     p_capture.add_argument("--source", action="append", dest="sources", help="Specific sources (calendar, reminders, notes, mail)")
+
+    # Text capture for bridge
+    p_text_capture = sub.add_parser("text-capture", help="Capture bounded text for Apple Intelligence bridge")
+    p_text_capture.add_argument("--text", required=True, help="Text content to capture")
+    p_text_capture.add_argument("--profile-grant", required=True, help="Profile grant identifier")
+    p_text_capture.add_argument("--request-id", required=True, help="Unique client request ID")
 
     sub.add_parser("actions", help="List available snack actions")
 
@@ -74,8 +101,19 @@ def main() -> None:
         raise SystemExit(cmd_capabilities())
     if args.command == "launchers":
         raise SystemExit(cmd_launchers(all_items=args.all))
+    if args.command == "bridge":
+        raise SystemExit(cmd_bridge())
     if args.command == "capture":
         raise SystemExit(cmd_capture(sources=args.sources))
+    if args.command == "text-capture":
+        engine = ActivityCaptureEngine()
+        result = engine.capture_text(
+            text=args.text,
+            profile_grant=args.profile_grant,
+            request_id=args.request_id,
+        )
+        print(json.dumps(result, indent=2))
+        raise SystemExit(0 if result.get("ok") else 1)
     if args.command == "actions":
         raise SystemExit(cmd_actions())
 

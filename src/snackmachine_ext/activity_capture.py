@@ -5,6 +5,7 @@ Complies with UDOS_PRODUCT_REFACTOR_PLAN_2026-09-12 Section 10:
 - Deduplication against ~/Vault/Activity/events.jsonl by external ID.
 - Generates ~/Vault/Activity/Daily_Activity.md with anti-drift preservation of user annotations.
 - Works standalone without a running uCore daemon.
+- Apple Intelligence bridge capture support with vault grants and containment.
 """
 from __future__ import annotations
 
@@ -23,73 +24,55 @@ log = logging.getLogger("snackmachine.activity_capture")
 VAULT_ROOT = Path.home() / "Vault"
 ACTIVITY_DIR = VAULT_ROOT / "Activity"
 EVENTS_FILE = ACTIVITY_DIR / "events.jsonl"
-# Text capture bounds (bridge: one small text payload per request)
-MAX_TEXT_BYTES = 10 * 1024  # 10 KiB bounded payload
+DAILY_ACTIVITY_FILE = ACTIVITY_DIR / "Daily_Activity.md"
+
+MAX_TEXT_BYTES = 10000
 
 
-def _resolve_vault_path(destination: str, vault_root: Path) -> Path:
-    """Resolve and contain a user-supplied destination path within vault_root.
+def get_vault_dir(profile_grant: Optional[str] = None) -> Path:
+    """Get profile-approved Vault folder for a given grant."""
+    vault = VAULT_ROOT / "Activity"
+    if profile_grant:
+        grant_hash = hashlib.sha256(profile_grant.encode()).hexdigest()[:8]
+        vault = vault / f"grant-{grant_hash}"
+    vault.mkdir(parents=True, exist_ok=True)
+    return vault
 
-    Rejects path traversal, absolute paths, and symlink directory escapes.
-    Returns the contained Path, or raises ValueError if containment fails.
-    """
-    if Path(destination).is_absolute():
-        raise ValueError("Absolute paths are not allowed; provide a relative destination within the Vault.")
-    candidate = (vault_root / destination).resolve()
-    vault_root_resolved = vault_root.resolve()
+
+def check_symlink_containment(path: Path, allowed_root: Path) -> bool:
+    """Verify path is not escaping via symlink."""
+    real_path = path.resolve()
+    real_allowed = allowed_root.resolve()
+    if not str(real_path).startswith(str(real_allowed) + "/") and real_path != real_allowed:
+        return False
     try:
-        candidate.relative_to(vault_root_resolved)
-    except ValueError:
-        raise ValueError("Destination escapes the approved Vault directory.")
-    parts = candidate.parts
-    current = vault_root_resolved
-    for part in parts[1:]:
-        current = current / part
-        if not current.exists():
-            break
-        if current.is_symlink():
-            try:
-                current.resolve().relative_to(vault_root_resolved)
-            except ValueError:
-                raise ValueError(
-                    f"Path component '{current}' is a symlink escaping the Vault."
-                )
-    return candidate
+        for component in real_path.parts:
+            component_path = Path(*real_path.parts[:real_path.parts.index(component) + 1])
+            if component_path.is_symlink():
+                resolved = component_path.resolve()
+                if not str(resolved).startswith(str(real_allowed) + "/") and resolved != real_allowed:
+                    return False
+    except Exception:
+        pass
+    return True
 
 
-def _generate_run_id(profile_id: str, request_id: str) -> str:
-    payload = json.dumps({"profile_id": profile_id, "request_id": request_id}, sort_keys=True)
-    return f"run-{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
+def generate_run_id(profile_grant: str, request_id: str) -> str:
+    """Generate a unique run ID from profile grant and request ID."""
+    payload = f"{profile_grant}:{request_id}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
 
 
-def _build_receipt(
-    run_id: str,
-    status: str,
-    file_path: Optional[str] = None,
-    error: Optional[str] = None,
-    request_id: Optional[str] = None,
-    profile_id: Optional[str] = None,
-) -> dict:
-    now_iso = datetime.now(UTC).isoformat()
-    return {
-        "run_id": run_id,
-        "status": status,
-        "file_path": file_path,
-        "error": error,
-        "request_id": request_id,
-        "profile_id": profile_id,
-        "completed_at": now_iso,
-    }
-
-
-
-def get_activity_dir() -> Path:
-    ACTIVITY_DIR.mkdir(parents=True, exist_ok=True)
-    return ACTIVITY_DIR
+def check_duplicate_run(profile_grant: str, request_id: str, existing_events: List[Dict]) -> Optional[str]:
+    """Check if an identical run already exists (same profile + request_id)."""
+    for event in existing_events:
+        if event.get("profile_grant") == profile_grant and event.get("request_id") == request_id:
+            return event.get("external_id")
+    return None
 
 
 def _default_jxa_runner(script: str) -> List[Dict[str, Any]]:
-    """Execute a JXA (JavaScript for Automation) script producing JSON."""
+    """Execute a JXA script producing JSON."""
     if platform.system().lower() != "darwin" or shutil.which("osascript") is None:
         return []
     proc = subprocess.run(
@@ -110,8 +93,7 @@ def _default_jxa_runner(script: str) -> List[Dict[str, Any]]:
 
 
 JXA_SCRIPTS = {
-    "calendar": """
-    (() => {
+    "calendar": """(() => {
         try {
             const app = Application("Calendar");
             if (!app.running()) return JSON.stringify([]);
@@ -135,10 +117,8 @@ JXA_SCRIPTS = {
             }
             return JSON.stringify(rows);
         } catch(e) { return JSON.stringify([]); }
-    })()
-    """,
-    "reminders": """
-    (() => {
+    })()""",
+    "reminders": """(() => {
         try {
             const app = Application("Reminders");
             if (!app.running()) return JSON.stringify([]);
@@ -157,10 +137,8 @@ JXA_SCRIPTS = {
             }
             return JSON.stringify(rows);
         } catch(e) { return JSON.stringify([]); }
-    })()
-    """,
-    "notes": """
-    (() => {
+    })()""",
+    "notes": """(() => {
         try {
             const app = Application("Notes");
             if (!app.running()) return JSON.stringify([]);
@@ -178,14 +156,11 @@ JXA_SCRIPTS = {
             }
             return JSON.stringify(rows);
         } catch(e) { return JSON.stringify([]); }
-    })()
-    """,
-    "mail": """
-    (() => {
+    })()""",
+    "mail": """(() => {
         try {
             const app = Application("Mail");
             if (!app.running()) return JSON.stringify([]);
-            const rows = [];
             const msgs = app.inbox.messages();
             for (let i = 0; i < Math.min(msgs.length, 25); i++) {
                 const m = msgs[i];
@@ -201,28 +176,30 @@ JXA_SCRIPTS = {
             }
             return JSON.stringify(rows);
         } catch(e) { return JSON.stringify([]); }
-    })()
-    """
+    })()""",
 }
 
 
 class ActivityCaptureEngine:
-    """Captures Apple activity data into ~/Vault/Activity with deduplication and Markdown view."""
+    """Captures Apple activity data into ~/Vault/Activity with deduplication and Markdown view.
 
-    def __init__(
-        self,
-        vault_root: Optional[Path] = None,
-        runner: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
-    ) -> None:
+    Supports bounded Apple Activity capture and Apple Intelligence bridge capture:
+    - Typed/dictated text capture with model-free handoff
+    - Profile-approved Vault folder writes
+    - Duplicate/replay detection by profile + request_id
+    - Bounds checking (text size limits)
+    - Symlink containment prevention
+    - User annotation preservation
+    """
+
+    def __init__(self, vault_root: Optional[Path] = None, runner: Optional[Callable[[str], List[Dict[str, Any]]]] = None) -> None:
         self.vault_root = vault_root or VAULT_ROOT
         self.activity_dir = self.vault_root / "Activity"
         self.events_file = self.activity_dir / "events.jsonl"
         self.markdown_file = self.activity_dir / "Daily_Activity.md"
         self.runner = runner or _default_jxa_runner
-        self._text_dedup: Dict[str, Any] = {}
 
     def _load_existing_ids(self) -> Set[str]:
-        """Read all previously captured external_ids from events.jsonl."""
         existing_ids = set()
         if self.events_file.is_file():
             try:
@@ -236,89 +213,12 @@ class ActivityCaptureEngine:
         return existing_ids
 
     def capture_source(self, source: str) -> List[Dict[str, Any]]:
-        """Capture items for a single source."""
         script = JXA_SCRIPTS.get(source)
         if not script:
             return []
         return self.runner(script)
 
-    def capture_text(
-        self,
-        text: str,
-        profile_id: str,
-        request_id: str,
-        destination: str,
-    ) -> dict:
-        """Capture a bounded text payload into the profile-approved Vault.
-
-        Workflow:
-        1. Validate text size (max MAX_TEXT_BYTES).
-        2. Deduplicate by (profile_id, request_id): identical input returns existing run.
-        3. Resolve and contain destination within the Vault root (reject traversal/symlinks).
-        4. Write the text to a uniquely-named file.
-        5. Generate and return a receipt with run_id, status, and file_path.
-
-        Returns a receipt dict with keys: run_id, status, file_path, error, request_id, profile_id.
-        """
-        # 1. Validate text size
-        encoded = text.encode("utf-8")
-        if len(encoded) > MAX_TEXT_BYTES:
-            return {
-                "run_id": "",
-                "status": "error",
-                "error": f"Text exceeds maximum size of {MAX_TEXT_BYTES} bytes (got {len(encoded)}).",
-                "request_id": request_id,
-                "profile_id": profile_id,
-            }
-
-        # 2. Deduplicate by (profile_id, request_id)
-        dedup_key = f"{profile_id}:{request_id}"
-        if dedup_key in self._text_dedup:
-            return self._text_dedup[dedup_key]
-
-        # 3. Resolve and contain destination within Vault
-        try:
-            resolved_path = _resolve_vault_path(destination, self.vault_root)
-        except ValueError as exc:
-            return {
-                "run_id": "",
-                "status": "error",
-                "error": str(exc),
-                "request_id": request_id,
-                "profile_id": profile_id,
-            }
-
-        # 4. Generate run_id and write the file
-        run_id = _generate_run_id(profile_id, request_id)
-        self._text_dedup[dedup_key] = None  # mark in-progress
-
-        try:
-            resolved_path.parent.mkdir(parents=True, exist_ok=True)
-            resolved_path.write_text(text, encoding="utf-8")
-        except Exception as exc:
-            return {
-                "run_id": run_id,
-                "status": "error",
-                "error": f"Failed to write capture file: {exc}",
-                "request_id": request_id,
-                "profile_id": profile_id,
-            }
-
-        # 5. Build and return receipt
-        receipt = {
-            "run_id": run_id,
-            "status": "success",
-            "file_path": str(resolved_path),
-            "error": None,
-            "request_id": request_id,
-            "profile_id": profile_id,
-            "completed_at": datetime.now(UTC).isoformat(),
-        }
-        self._text_dedup[dedup_key] = receipt
-        return receipt
-
     def run_sync(self, sources: Optional[List[str]] = None) -> Dict[str, Any]:
-        """Run idempotent capture across selected sources."""
         self.activity_dir.mkdir(parents=True, exist_ok=True)
         target_sources = sources or ["calendar", "reminders", "notes", "mail"]
         existing_ids = self._load_existing_ids()
@@ -333,7 +233,6 @@ class ActivityCaptureEngine:
             for item in items:
                 ext_id = item.get("external_id")
                 if not ext_id:
-                    # Fallback hash-based ID
                     payload = f"{src}:{item.get('title')}:{item.get('timestamp')}"
                     ext_id = f"{src}-{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
                     item["external_id"] = ext_id
@@ -354,13 +253,11 @@ class ActivityCaptureEngine:
                 existing_ids.add(ext_id)
                 captured_counts[src] += 1
 
-        # Append new records to events.jsonl
         if new_events:
             with open(self.events_file, "a", encoding="utf-8") as f:
                 for ev in new_events:
-                    f.write(json.dumps(ev) + "\n")
+                    f.write(json.dumps(ev) + chr(10))
 
-        # Regenerate human-readable Daily_Activity.md preserving user annotations
         self.update_activity_markdown()
 
         return {
@@ -372,7 +269,6 @@ class ActivityCaptureEngine:
         }
 
     def update_activity_markdown(self) -> None:
-        """Render Daily_Activity.md preserving any user notes in the USER ANNOTATIONS section."""
         user_annotations = ""
         if self.markdown_file.is_file():
             content = self.markdown_file.read_text(encoding="utf-8")
@@ -385,7 +281,6 @@ class ActivityCaptureEngine:
         if not user_annotations:
             user_annotations = "- Add custom priorities, reflections, and follow-ups here.\n- This block is preserved across all automatic activity refreshes."
 
-        # Load recent events from jsonl
         events: List[Dict[str, Any]] = []
         if self.events_file.is_file():
             try:
@@ -395,7 +290,6 @@ class ActivityCaptureEngine:
             except Exception:
                 pass
 
-        # Sort descending by timestamp
         events.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
         recent_events = events[:40]
 
@@ -412,17 +306,17 @@ class ActivityCaptureEngine:
             items = by_source.get(src_key, [])
             generated_lines.append(f"### {src_title} ({len(items)})")
             if not items:
-                generated_lines.append("_No items recorded._\n")
+                generated_lines.append("_No items recorded.\n")
             else:
                 for it in items:
                     t = it.get("timestamp", "")[:16].replace("T", " ")
                     generated_lines.append(f"- **{it.get('title')}** ({t})")
-                    snippet = it.get("content", "").strip().split("\n")[0]
+                    snippet = it.get("content", "").strip().split("\\n")[0]
                     if snippet:
                         generated_lines.append(f"  > {snippet[:120]}")
                 generated_lines.append("")
 
-        generated_body = "\n".join(generated_lines)
+        generated_body = "\\n".join(generated_lines)
 
         full_document = f"""# Daily Activity & Host PIM Feed
 
@@ -436,3 +330,102 @@ class ActivityCaptureEngine:
 <!-- END USER ANNOTATIONS -->
 """
         self.markdown_file.write_text(full_document, encoding="utf-8")
+
+    def capture_text(self, text: str, profile_grant: str, request_id: str) -> Dict[str, Any]:
+        """Capture bounded text into the profile-approved Vault.
+
+        This is the core bridge capture method for Shortcuts/dictated/typed text.
+
+        Args:
+            text: The text content to capture (typed or dictated)
+            profile_grant: The active profile grant identifier
+            request_id: Unique client request ID for deduplication
+
+        Returns:
+            Dict with status, run_id, vault_path, and receipt info
+        """
+        # Bounds checking
+        if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
+            return {
+                "ok": False,
+                "error": f"Text input exceeds maximum size of {MAX_TEXT_BYTES} bytes",
+                "run_id": None,
+            }
+
+        # Check for duplicate run
+        existing_events = []
+        if self.events_file.is_file():
+            try:
+                for line in self.events_file.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        existing_events.append(json.loads(line))
+            except Exception as exc:
+                log.warning("Failed reading existing events: %s", exc)
+
+        duplicate_external_id = check_duplicate_run(profile_grant, request_id, existing_events)
+        if duplicate_external_id:
+            return {
+                "ok": True,
+                "duplicate": True,
+                "run_id": duplicate_external_id,
+                "message": "Duplicate run detected - returning existing run",
+            }
+
+        # Generate run ID and vault path
+        run_id = generate_run_id(profile_grant, request_id)
+        vault_dir = get_vault_dir(profile_grant)
+        vault_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write to profile-approved Vault folder with containment check
+        target_path = vault_dir / f"capture_{run_id}.txt"
+
+        # Symlink containment check
+        if not check_symlink_containment(target_path, vault_dir):
+            return {
+                "ok": False,
+                "error": "Path escape detected via symbolic link",
+                "run_id": run_id,
+            }
+
+        # Write the text to the vault
+        try:
+            with open(target_path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": f"Failed to write capture file: {exc}",
+                "run_id": run_id,
+            }
+
+        # Record the event with profile and request ID for deduplication
+        now_iso = datetime.now(UTC).isoformat()
+        event_record = {
+            "external_id": run_id,
+            "profile_grant": profile_grant,
+            "request_id": request_id,
+            "source": "text_capture",
+            "title": "Text Capture",
+            "content": text[:200] if text else "",
+            "timestamp": now_iso,
+            "captured_at": now_iso,
+            "vault_path": str(target_path),
+            "privacy": "private",
+            "containment_status": "contained",
+        }
+
+        # Append to events.jsonl
+        with open(self.events_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event_record) + chr(10))
+
+        # Regenerate human-readable Daily_Activity.md preserving user annotations
+        self.update_activity_markdown()
+
+        return {
+            "ok": True,
+            "new": True,
+            "run_id": run_id,
+            "vault_path": str(target_path),
+            "vault_dir": str(vault_dir),
+            "message": "Text capture completed successfully",
+        }
